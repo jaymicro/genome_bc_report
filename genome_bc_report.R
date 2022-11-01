@@ -8,6 +8,12 @@ library(janitor)
 library(ggeffects)
 library(mgcv)
 library(glue)
+library(vegan)
+library(emmeans)
+library(multcompView)
+library(multcomp)
+library(patchwork)
+library(easystats)
 
 
 
@@ -16,6 +22,40 @@ library(glue)
 
 enzyme <- read.csv("../../enzyme_cal_combined.csv") %>% 
   clean_names()
+plant_summer2021 <- readxl::read_xlsx("../../Plant data.xlsx", sheet = 1) %>% 
+  clean_names() %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(season = "summer2021")
+plant_fall2021 <- readxl::read_xlsx("../../Plant data.xlsx", sheet = 2) %>% 
+  clean_names() %>% 
+  replace(is.na(.), 0)%>% 
+  mutate(season = "fall2021")
+plant_spring2022 <- readxl::read_xlsx("../../Plant data.xlsx", sheet = 3) %>% 
+  clean_names() %>% 
+  replace(is.na(.), 0)%>% 
+  mutate(season = "spring2022")
+
+df_plant <- bind_rows( plant_summer2021, plant_fall2021, plant_spring2022)%>% 
+  replace(is.na(.), 0)
+
+plant_meta <- df_plant %>% 
+  dplyr::select(c(site:details, season, bareground,moss,litter,rocks,cryptocrust)) %>% 
+  mutate(biosolid = str_extract(details, pattern = "[0-9]+$"),
+         age = case_when(
+           str_detect(season, pattern = "2021") ~ (2021 - as.numeric(biosolid)),
+           str_detect(season, pattern = "2022") ~ (2022 - as.numeric(biosolid))
+         ),
+         age = replace_na(as.character(age), "ref"),
+         age = factor(age,
+                      levels = c("ref", "3" ,  "4" ,  "6" ,  "7" ,  "8", "15",
+                                 "16",  "21",  "22",  "26",  "27")))
+
+plant <- df_plant %>% 
+  dplyr::select(!c(site:details, season)) %>% 
+  select_if(colSums(.)> 0) %>% 
+  select_if(!str_detect(colnames(.), pattern = "unknown")) %>% 
+  dplyr::select(!c("bareground", "moss", "litter","rocks","cryptocrust" )) %>% 
+  decostand(., method = "hellinger") 
 
 df_enz <- enzyme %>% 
   mutate(biosolid = str_extract(details, pattern = "[0-9]+$"),
@@ -42,6 +82,8 @@ theme_plot <- theme_bw() +
         axis.text = element_text(size = 12, color = "black"),
         panel.grid.minor = element_blank())
 
+
+##LAP
 mod1_lap <- lme(sqrt(lap) ~ poly(age,2)  ,
                 random = ~ 1|season/quadrate_no,
                 na.action = na.omit,
@@ -69,7 +111,7 @@ ggsave(lap, filename = "../../plot/lap.jpeg", width = 8, height = 6, units = "in
 
 
 
-
+##CB
 
 mod1_cb <- lme(cb ~ poly(age,2) ,
                 random = ~ 1|season/quadrate_no,
@@ -290,7 +332,7 @@ ag_cn_ratio <- plot(ggpredict(mod2_ag, terms = "cn_ratio")) +
   theme_plot +
   labs(title = NULL,
        x = "C/N ratio",
-       y = expression(paste("N-acetyl-",β,"-Glucosaminidase ",
+       y = expression(paste(alpha,"-Glucosidase activity ",
                             "(",mu, "M/g/hr)"))) +
   scale_x_continuous(breaks = seq(7, 30, by = 5)) +
   annotate(geom = "text", label = glue("Rsq = {round(MuMIn::r.squaredGLMM(mod2_ag)[1], 2)},
@@ -322,3 +364,119 @@ cn <- ggplot(df_enz_noref, aes(x = age, y = cn_ratio)) +
        y = "C/N ratio")
 ggsave(cn, filename = "../../plot/cn_ratio.jpeg", width = 8, height = 6, units = "in", dpi =1000)
 
+
+# Plant community ---------------------------------------------------------
+
+##betadiv
+# dist_bray <- vegdist(plant, method = "bray")
+# 
+# set.seed(880612)
+# mds <- metaMDS(plant, trymax = 999, autotransform = TRUE)
+# plot(mds)
+# text(mds)
+# stressplot(mds)
+# 
+# pc <- ape::pcoa(dist_bray)
+# biplot(pc)
+
+
+##alpha div
+
+alpha_df <- data.frame(
+  richness = specnumber(plant),
+  invsimp = diversity(plant, index = "invsimpson"),
+  shan = diversity(plant, index = "shannon"),
+  plant_meta
+) %>% 
+  inner_join(., enzyme, by = c("site","quadrate_no","code","details","season")) %>% 
+  filter(age != "ref") %>% 
+  mutate(age = as.numeric(paste(age)),
+         cn_ratio = carbon/nitrogen)
+
+
+rich_mod1 <- lme(richness ~ poly(age,2),
+                random = ~ 1|season/quadrate_no,
+                na.action = na.omit,
+                data = alpha_df )
+summary(rich_mod1)
+anova.lme(rich_mod1)
+MuMIn::r.squaredGLMM(rich_mod1)
+
+rich <- plot(ggpredict(rich_mod1, terms = "age")) +
+  theme_plot +
+  labs(title = NULL,
+                  x = "Reclamation age (years)",
+                  y = "Species richness") +
+  scale_x_continuous(breaks = seq(7, 30, by = 5)) +
+  annotate(geom = "text", label = glue("Rsq = {round(MuMIn::r.squaredGLMM(rich_mod1)[1], 2)},
+                                       pval < {round(anova.lme(rich_mod1)$`p-value`[2], 5)}"),
+           x = 5, y = 3, size = 5)
+rich
+ 
+
+rich_mod2 <- lme(richness ~ poly(cn_ratio,2),
+                 random = ~ 1|season/quadrate_no,
+                 na.action = na.omit,
+                 data = alpha_df )
+summary(rich_mod2)
+anova.lme(rich_mod2)
+MuMIn::r.squaredGLMM(rich_mod2)
+
+rich_cn_ratio <- plot(ggpredict(rich_mod2, terms = "cn_ratio")) +
+  theme_plot +
+  labs(title = NULL,
+       x = "C/N ratio",
+       y = "Species richness") +
+  scale_x_continuous(breaks = seq(7, 30, by = 5)) +
+  annotate(geom = "text", label = glue("Rsq = {round(MuMIn::r.squaredGLMM(rich_mod2)[1], 2)},
+                                       pval < {round(anova.lme(rich_mod2)$`p-value`[2], 3)}"),
+           x = 9, y = 3, size = 5)
+rich_cn_ratio
+
+
+# Combined plots ----------------------------------------------------------
+
+
+lap_comb <- lap + lap_cn_ratio + plot_annotation(tag_levels = 'A')
+ggsave(lap_comb, filename = "../../plot/lap_comb.jpeg", width = 12, height = 6, units = "in", dpi =1000)
+
+
+cb_comb <- cb + cb_cn_ratio + plot_annotation(tag_levels = 'A')
+ggsave(cb_comb, filename = "../../plot/cb_comb.jpeg", width = 12, height = 6, units = "in", dpi =1000)
+
+
+phos_comb <- phos + phos_cn_ratio + plot_annotation(tag_levels = 'A')
+ggsave(phos_comb, filename = "../../plot/phos_comb.jpeg", width = 12, height = 6, units = "in", dpi =1000)
+
+
+nag_comb <- nag + nag_cn_ratio + plot_annotation(tag_levels = 'A')
+ggsave(nag_comb, filename = "../../plot/nag_comb.jpeg", width = 12, height = 6, units = "in", dpi =1000)
+
+
+ag_comb <- ag + ag_cn_ratio + plot_annotation(tag_levels = 'A')
+ggsave(ag_comb, filename = "../../plot/ag_comb.jpeg", width = 12, height = 6, units = "in", dpi =1000)
+
+
+rich_comb <- rich + rich_cn_ratio + plot_annotation(tag_levels = 'A')
+ggsave(rich_comb, filename = "../../plot/rich_comb.jpeg", width = 12, height = 6, units = "in", dpi =1000)
+
+
+
+
+# Correlation among enzyme and other variables  ---------------------------
+
+
+alpha_df %>% 
+  dplyr::select(c(richness,cryptocrust, litter.x, lap:ag)) %>% 
+  rename(Richness = "richness",
+         Cryptocrust = "cryptocrust",
+         Litter = "litter.x",
+         LAP = "lap",
+         CB = "cb",
+         Phos ="phos",
+         NAG = "nag",
+         AG = "ag") %>% 
+  correlation(method = "spearman", p_adjust = "fdr") %>% 
+  summary() %>% 
+  plot() +
+  theme_plot
