@@ -4,7 +4,6 @@
 
 library(tidyverse)
 library(nlme)
-library(janitor)
 library(ggeffects)
 library(mgcv)
 library(glue)
@@ -21,17 +20,17 @@ library(easystats)
 
 
 enzyme <- read.csv("../../enzyme_cal_combined.csv") %>% 
-  clean_names()
+  janitor::clean_names()
 plant_summer2021 <- readxl::read_xlsx("../../Plant data.xlsx", sheet = 1) %>% 
-  clean_names() %>% 
+  janitor::clean_names(.) %>% 
   replace(is.na(.), 0) %>% 
   mutate(season = "summer2021")
 plant_fall2021 <- readxl::read_xlsx("../../Plant data.xlsx", sheet = 2) %>% 
-  clean_names() %>% 
+  janitor::clean_names() %>% 
   replace(is.na(.), 0)%>% 
   mutate(season = "fall2021")
 plant_spring2022 <- readxl::read_xlsx("../../Plant data.xlsx", sheet = 3) %>% 
-  clean_names() %>% 
+  janitor::clean_names() %>% 
   replace(is.na(.), 0)%>% 
   mutate(season = "spring2022")
 
@@ -54,8 +53,7 @@ plant <- df_plant %>%
   dplyr::select(!c(site:details, season)) %>% 
   select_if(colSums(.)> 0) %>% 
   select_if(!str_detect(colnames(.), pattern = "unknown")) %>% 
-  dplyr::select(!c("bareground", "moss", "litter","rocks","cryptocrust" )) %>% 
-  decostand(., method = "hellinger") 
+  dplyr::select(!c("bareground", "moss", "litter","rocks","cryptocrust" )) 
 
 df_enz <- enzyme %>% 
   mutate(biosolid = str_extract(details, pattern = "[0-9]+$"),
@@ -368,16 +366,30 @@ ggsave(cn, filename = "../../plot/cn_ratio.jpeg", width = 8, height = 6, units =
 # Plant community ---------------------------------------------------------
 
 ##betadiv
-# dist_bray <- vegdist(plant, method = "bray")
+# dist_bray <- plant %>% 
+#   filter(rowSums(.) > 0) %>% 
+#   decostand(., method = "normalize")  %>%
+#   vegdist(., method = "bray")
 # 
-# set.seed(880612)
-# mds <- metaMDS(plant, trymax = 999, autotransform = TRUE)
+# set.seed(888888)
+# mds <- metaMDS(dist_bray, trymax = 999, autotransform = TRUE,  previous.best = mds)
 # plot(mds)
 # text(mds)
 # stressplot(mds)
 # 
 # pc <- ape::pcoa(dist_bray)
 # biplot(pc)
+# 
+# rc_pc <- RC.pc(dist_bray, rand = 1000, na.zero = TRUE, nworker =60,
+#                memory.G = 120, weighted = TRUE, unit.sum = NULL,
+#                meta.ab = NULL,sig.index="RC",
+#                detail.null=FALSE,output.bray=FALSE,silent=FALSE,
+#                taxo.metric="bray", transform.method='hellinger', 
+#                dirichlet=FALSE)
+# 
+# hist(as.dist(rc_pc$index))
+
+
 
 
 ##alpha div
@@ -461,6 +473,8 @@ rich_comb <- rich + rich_cn_ratio + plot_annotation(tag_levels = 'A')
 ggsave(rich_comb, filename = "../../plot/rich_comb.jpeg", width = 12, height = 6, units = "in", dpi =1000)
 
 
+all_comb <- lap_comb/ cb_comb/ phos_comb/ nag_comb/ ag_comb +  plot_annotation(tag_levels = 'A')
+ggsave(all_comb, filename = "../../plot/all_comb.jpeg", width = 18, height = 28, units = "in", dpi =1000)
 
 
 # Correlation among enzyme and other variables  ---------------------------
